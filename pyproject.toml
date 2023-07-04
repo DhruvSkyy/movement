@@ -17,6 +17,7 @@ dependencies = [
     "pydantic",
     "pooch",
     "tqdm",
+    "sleap-io",
 ]
 
 classifiers = [
