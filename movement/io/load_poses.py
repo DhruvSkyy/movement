@@ -2,7 +2,9 @@ import logging
 from pathlib import Path
 from typing import Optional, Union
 
+import numpy as np
 import pandas as pd
+import sleap_io as sio
 
 from movement.io.validators import DeepLabCutPosesFile
 
@@ -90,3 +92,93 @@ def _parse_dlc_csv_to_dataframe(file_path: Path) -> pd.DataFrame:
     )
     df.columns.rename(level_names, inplace=True)
     return df
+
+
+def convert_dlc_dataframe_to_sleap_labels(df: pd.DataFrame) -> sio.Labels:
+    """Converts a DataFrame containing DLC poses to a SLEAP Labels object.
+
+    Parameters
+    ----------
+    df : DataFrame
+        DataFrame containing the DLC poses.
+
+    Returns
+    -------
+    sleap Labels
+        SLEAP Labels object containing labeled frames.
+    """
+
+    # TODO: create video object from image frames
+
+    # assume 1 scorer
+    scorer = df.columns.get_level_values("scorer").unique()[0]
+    individuals = (
+        df.columns.get_level_values("individuals").unique().to_list()
+        if "individuals" in df.columns.names
+        else []
+    )
+    bodyparts = df.columns.get_level_values("bodyparts").unique().to_list()
+
+    # create Tracks and Skeleton
+    tracks = [sio.Track(name=track) for track in individuals]
+    skeleton = sio.Skeleton(nodes=bodyparts)
+
+    lfs = []
+
+    # create a PredictedInstance for each row and each track
+    for i, row in df.iterrows():
+        instances = []
+        if tracks:
+            # multianimal dataset
+            for track in tracks:
+                any_not_missing = False
+                instance_points = {}
+                for node in skeleton.node_names:
+                    x, y, score = (
+                        row[(scorer, track.name, node, "x")],
+                        row[(scorer, track.name, node, "y")],
+                        row[(scorer, track.name, node, "likelihood")],
+                    )
+                    instance_points[node] = sio.PredictedPoint(
+                        x, y, score=score
+                    )
+                    if ~(np.isnan(x) and np.isnan(y)):
+                        any_not_missing = True
+
+                # skip instance creation if all points are missing
+                if any_not_missing:
+                    instances.append(
+                        sio.PredictedInstance(
+                            points=instance_points,
+                            track=track,
+                            skeleton=skeleton,
+                        )
+                    )
+        else:
+            any_not_missing = False
+            instance_points = {}
+            for node in skeleton.node_names:
+                x, y, score = (
+                    row[(scorer, node, "x")],
+                    row[(scorer, node, "y")],
+                    row[(scorer, node, "likelihood")],
+                )
+                instance_points[node] = sio.PredictedPoint(x, y, score=score)
+                if ~(np.isnan(x) and np.isnan(y)):
+                    any_not_missing = True
+            # skip instance creation if all points are missing
+            if any_not_missing:
+                instances.append(
+                    sio.PredictedInstance(
+                        points=instance_points,
+                        skeleton=skeleton,
+                    )
+                )
+        if instances:
+            lfs.append(
+                sio.LabeledFrame(
+                    video=sio.Video(""), instances=instances, frame_idx=i
+                )
+            )
+
+    return sio.Labels(labeled_frames=lfs)
